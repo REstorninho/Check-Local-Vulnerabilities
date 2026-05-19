@@ -514,20 +514,27 @@ if (-not (Test-Path $GrypeBin) -or $Force) {
 # ── OSV-Scanner ───────────────────────────────────────────────────
 $OsvBin = "$Tools\osv-scanner.exe"
 if (-not (Test-Path $OsvBin) -and -not $SkipDownload) {
+    # Tentar obter versão mais recente via GitHub API; fallback para versão conhecida
+    $OsvVer = "1.9.2"  # fallback hardcoded — actualizar se necessário
     try {
-        $rel = Invoke-RestMethod "https://api.github.com/repos/google/osv-scanner/releases/latest" -TimeoutSec 15
-        $ver = $rel.tag_name.TrimStart("v")
-        $url = "https://github.com/google/osv-scanner/releases/download/v${ver}/osv-scanner_windows-amd64.exe"
-        Ensure-Tool "OSV-Scanner" $OsvBin @($url) 10000000 | Out-Null
-    } catch { Write-Warn "  OSV-Scanner: $($_.Exception.Message)" }
+        $rel = Invoke-RestMethod "https://api.github.com/repos/google/osv-scanner/releases/latest" -TimeoutSec 15 -ErrorAction Stop
+        $OsvVer = $rel.tag_name.TrimStart("v")
+        Write-Info "OSV-Scanner versão mais recente: $OsvVer"
+    } catch {
+        Write-Warn "  OSV-Scanner: GitHub API inacessível — a usar versão fallback $OsvVer"
+    }
+    $url = "https://github.com/google/osv-scanner/releases/download/v${OsvVer}/osv-scanner_windows-amd64.exe"
+    Ensure-Tool "OSV-Scanner" $OsvBin @($url) 10000000 | Out-Null
 } elseif (Test-Path $OsvBin) { Write-Info "OSV-Scanner — cache OK" }
 
 # ── Watson ────────────────────────────────────────────────────────
 $WatsonBin = "$Tools\Watson.exe"
 if (-not (Test-Path $WatsonBin) -and -not $SkipDownload) {
+    # Múltiplos mirrors + fallback para versão conhecida no GitHub CDN
     Ensure-Tool "Watson" $WatsonBin @(
         "https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/raw/master/dotnet%20v4.5%20compiled%20binaries/Watson.exe",
-        "https://github.com/kraloveckey/ghostpack-binaries/raw/main/Windows/Watson.exe"
+        "https://github.com/kraloveckey/ghostpack-binaries/raw/main/Windows/Watson.exe",
+        "https://raw.githubusercontent.com/BC-SECURITY/Empire/main/empire/server/data/module_source/privesc/Watson.exe"
     ) 50000 | Out-Null
 } elseif (Test-Path $WatsonBin) { Write-Info "Watson — cache OK" }
 
@@ -644,15 +651,37 @@ if (Test-Path $PrivescCheck) {
     try {
         $pcJob = Start-Job -ScriptBlock {
             param($pc,$outBase,$runAsAdmin)
-            $null = Set-PSBreakpoint -Variable WarningPreference -Mode Read -Action {} -ErrorAction SilentlyContinue
-            Import-Module $pc -Force -ErrorAction Stop
+            # Suprimir warnings do PS dentro do job
+            $WarningPreference = "SilentlyContinue"
+            Import-Module $pc -Force -ErrorAction Stop -WarningAction SilentlyContinue
             Invoke-PrivescCheck -Extended -Force -Risky -Report $outBase -Format TXT,HTML,CSV 2>&1
         } -ArgumentList $PrivescCheck,"$Out\06_privesc",$runAsAdmin
         Wait-Job $pcJob -Timeout 300 | Out-Null
-        $jobOut = Receive-Job $pcJob; Remove-Job $pcJob -Force
-        @("=== PRIVESCCHECK OUTPUT ===","Correu como Admin: $runAsAdmin","","NOTA: Quando Admin, checks de ACL são menos fiáveis.","","") + $jobOut |
+        $jobOut = Receive-Job $pcJob -WarningAction SilentlyContinue
+        Remove-Job $pcJob -Force
+
+        # Separar warnings esperados (admin) do output real
+        # Warnings do PrivescCheck quando admin são informativos — guardar no .txt mas não poluir o terminal
+        $privescWarnings = @($jobOut | Where-Object { $_ -match "^WARNING:.*won't give proper results when run as an administrator" })
+        $privescOutput   = @($jobOut | Where-Object { $_ -notmatch "^WARNING:.*won't give proper results when run as an administrator" })
+
+        $adminWarningNote = if ($privescWarnings.Count -gt 0) {
+            @("","=== NOTA: $($privescWarnings.Count) checks ignorados por correr como Admin ===",
+              "(Para estes checks: correr sem privilégios elevados para resultados completos)",
+              "Checks ignorados:", ($privescWarnings -join "`n"), "")
+        } else { @() }
+
+        @("=== PRIVESCCHECK OUTPUT ===","Correu como Admin: $runAsAdmin","",
+          "NOTA: Quando Admin, checks de ACL/serviços são menos fiáveis.","","") `
+          + $privescOutput + $adminWarningNote |
             Out-File "$Out\06_privesc.txt" -Encoding UTF8
-        Write-Info "06_privesc OK"
+
+        # Só mostrar no terminal se houve warnings (1 linha resumida)
+        if ($privescWarnings.Count -gt 0) {
+            Write-Info "06_privesc OK ($($privescWarnings.Count) checks ignorados — ver .txt para detalhe)"
+        } else {
+            Write-Info "06_privesc OK"
+        }
     } catch {
         "Erro: $($_.Exception.Message)" | Out-File "$Out\06_privesc.txt" -Encoding UTF8
         Write-Warn "06_privesc ERRO: $($_.Exception.Message)"
