@@ -253,8 +253,6 @@ DIFF_FILE="${OUT}/diff_vs_previous.json"
 # Log estruturado (JSON Lines)
 ERROR_LOG="${OUT}/audit_errors.log"
 EVENT_LOG="${OUT}/audit_events.log"
-# Error log
-ERROR_LOG="${OUT}/audit_errors.log"
 ERROR_COUNT=0
 WARN_COUNT=0
 CURRENT_PHASE="init"
@@ -1083,6 +1081,12 @@ command -v pkexec &>/dev/null && {
     [[ -n "$PKEXEC_VER" ]] && kernel_lt "$PKEXEC_VER" "0.120" && \
         echo "  CRÍTICO: CVE-2021-4034 (PwnKit) — pkexec ${PKEXEC_VER} < 0.120 — CWE-269"
 }
+command -v sudo &>/dev/null && {
+    SUDO_VER=$(sudo -V 2>/dev/null | head -1 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+(p[0-9]+)?")
+    SUDO_VER_NUM=$(echo "$SUDO_VER" | grep -oE "^[0-9]+\.[0-9]+\.[0-9]+")
+    [[ -n "$SUDO_VER_NUM" ]] && kernel_lt "$SUDO_VER_NUM" "1.9.5" && \
+        echo "  CRÍTICO: CVE-2021-3156 (Baron Samedit) — sudo ${SUDO_VER} < 1.9.5p2 — CWE-787"
+}
 echo "${DISTRO_ID}" | grep -qi "ubuntu" && kernel_lt "$KV" "6.2.0" && \
     echo "  CRÍTICO: CVE-2023-2640 + CVE-2023-32629 (overlayfs Ubuntu)"
 command -v runc &>/dev/null && {
@@ -1128,12 +1132,12 @@ command -v flatpak &>/dev/null && flatpak list 2>/dev/null | grep -iE "firefox|c
 
 echo ""; echo "--- Servidores ---"
 for svc in nginx apache2 httpd mysql mariadb postgres redis-server mongod docker containerd; do
-    command -v "$svc" &>/dev/null && echo "  ${svc}: $("$svc" --version 2>/dev/null || "$svc" -v 2>/dev/null || echo 'installed'| head -1)"
+    command -v "$svc" &>/dev/null && echo "  ${svc}: $(("$svc" --version 2>/dev/null || "$svc" -v 2>/dev/null || echo 'installed') | head -1)"
 done
 
 echo ""; echo "--- DevOps / Security ---"
 for t in git curl wget openssl ssh gpg docker kubectl helm terraform ansible vault; do
-    command -v "$t" &>/dev/null && echo "  ${t}: $("$t" --version 2>/dev/null || "$t" -V 2>/dev/null || echo 'installed' | head -1)"
+    command -v "$t" &>/dev/null && echo "  ${t}: $(("$t" --version 2>/dev/null || "$t" -V 2>/dev/null || echo 'installed') | head -1)"
 done
 
 command -v snap    &>/dev/null && { echo ""; echo "--- Snap ---"; snap list 2>/dev/null | tail -n +2 | awk '{print "  "$1"=="$2}' | head -20; }
