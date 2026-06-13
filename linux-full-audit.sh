@@ -694,36 +694,25 @@ elif [[ "$SKIP_DOWNLOAD" == "false" ]] || [[ "$FORCE" == "true" ]]; then
     OSV_ZIP="${TOOLS}/osv_tmp.zip"
     OSV_TMP="${TOOLS}/osv_extracted"
 
-    # Determinar filtro de arquitectura para o asset
+    # Determinar filtro de arquitectura para o asset (binário raw, sem .zip)
     case "$ARCH" in
-        x86_64)  OSV_FILTER="*linux_amd64*.zip" ;;
-        aarch64) OSV_FILTER="*linux_arm64*.zip" ;;
-        armv7*)  OSV_FILTER="*linux_arm*.zip"   ;;
-        *)       OSV_FILTER="*linux_amd64*.zip" ;;
+        x86_64)  OSV_FILTER="osv-scanner_linux_amd64" ;;
+        aarch64) OSV_FILTER="osv-scanner_linux_arm64" ;;
+        armv7*)  OSV_FILTER="osv-scanner_linux_arm64" ;;
+        *)       OSV_FILTER="osv-scanner_linux_amd64" ;;
     esac
     # Fallback URL com versão conhecida
-    OSV_FALLBACK_URL="https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_2.3.8_linux_amd64.zip"
-    [[ "$ARCH" == "aarch64" ]] && OSV_FALLBACK_URL="https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_2.3.8_linux_arm64.zip"
+    OSV_FALLBACK_URL="https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64"
+    [[ "$ARCH" == "aarch64" ]] && OSV_FALLBACK_URL="https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_arm64"
 
     OSV_VER=$(github_release_download \
         "google/osv-scanner" "$OSV_FILTER" "$OSV_ZIP" 5000000 \
         "2.3.8" "$OSV_FALLBACK_URL" "$OSV_BIN") && {
-        mkdir -p "$OSV_TMP"
-        if unzip -q "$OSV_ZIP" -d "$OSV_TMP" 2>/dev/null; then
-            EXE_FOUND=$(find "$OSV_TMP" -type f \( -name "osv-scanner" -o -name "osv-scanner_*" \) \
-                        ! -name "*.zip" ! -name "*.sha256" 2>/dev/null | head -1)
-            if [[ -n "$EXE_FOUND" ]]; then
-                cp "$EXE_FOUND" "$OSV_BIN"
-                chmod +x "$OSV_BIN"
-                OSV_CMD="$OSV_BIN"
-                sz=$(stat -c%s "$OSV_BIN" 2>/dev/null || echo 0)
-                info "  OSV-Scanner v${OSV_VER} extraído OK ($(( sz / 1048576 )) MB)"
-            else
-                warn "  OSV-Scanner: binário não encontrado dentro do ZIP"
-            fi
-        else
-            warn "  OSV-Scanner: falha ao extrair ZIP"
-        fi
+        cp "$OSV_ZIP" "$OSV_BIN"
+        chmod +x "$OSV_BIN"
+        OSV_CMD="$OSV_BIN"
+        sz=$(stat -c%s "$OSV_BIN" 2>/dev/null || echo 0)
+        info "  OSV-Scanner v${OSV_VER} obtido OK ($(( sz / 1048576 )) MB)"
     } || warn "  OSV-Scanner: download falhou"
 
     # Limpar temporários sempre
