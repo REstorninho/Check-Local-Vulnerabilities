@@ -342,6 +342,9 @@ sudo bash linux-full-audit.sh --deep-scan
 # Forçar re-download de todas as ferramentas
 sudo bash linux-full-audit.sh --force
 
+# Debug com trace dedicado (debug_trace.log)
+sudo bash linux-full-audit.sh --debug
+
 # Output personalizado
 sudo bash linux-full-audit.sh --output /tmp/audit
 ```
@@ -358,6 +361,8 @@ sudo bash linux-full-audit.sh --output /tmp/audit
 | `--no-nvd` | `-n` | Salta consulta NVD API (modo offline) |
 | `--no-browser` | | Não tenta abrir o relatório no browser |
 | `--force` | | Re-download de ferramentas mesmo que já existam em cache |
+| `--stale-days N` | | Re-download automático de ferramentas em cache com mais de N dias (default: 7; `0` desactiva) |
+| `--debug` | | Activa trace (`set -x`) para `debug_trace.log`, sem poluir os outputs das secções |
 | `--nvd-api-key KEY` | | NVD API key (também via env var `NVD_API_KEY`) |
 | `--compare FILE` | | Comparar com `cve_results.json` de run anterior |
 | `--fail-on LEVEL` | | Exit code != 0 quando há findings (`critical`/`high`/`medium`) |
@@ -500,6 +505,7 @@ Todos os dados estruturados ficam disponíveis em múltiplos formatos para integ
 | `diff_vs_previous.json` | JSON | Comparação com run anterior | Tracking de postura ao longo do tempo |
 | `audit_events.log` | JSON Lines | Todos os eventos de execução | Debug e auditoria |
 | `audit_errors.log` | JSON Lines | Só ERROR e WARN | Debug rápido |
+| `debug_trace.log` | texto | Trace `set -x` completo (só com `--debug`) | Debug detalhado |
 | `REPORT_<host>_<date>.html` | HTML | Relatório interactivo | Visualização humana |
 
 Campos do `cve_results.json`: `Source` (Trivy/Grype/NVD), `App`, `Version`, `FixedIn`, `CveId`, `Severity`, `Cvss`, `Cwe`, `Title`, `Description`, `References`.

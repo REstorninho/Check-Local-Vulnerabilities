@@ -173,6 +173,7 @@ NO_NVD=false
 NO_BROWSER=false
 FORCE=false
 STALE_DAYS=7
+DEBUG=false
 DEEP_SCAN=false
 DEBUG=false
 CUSTOM_OUT=""
@@ -203,6 +204,8 @@ cat <<'EOF'
     --force               Re-download de ferramentas mesmo que existam
     --stale-days N        Re-download automático se cache tiver mais de N
                           dias (default: 7; 0 desactiva)
+    --debug               Activa trace (set -x) para debug_trace.log,
+                          sem poluir os ficheiros de output das secções
     --nvd-api-key KEY     NVD API key (também via env var NVD_API_KEY)
                           Com key: rate limit passa de 5/30s para 50/30s (10× mais rápido)
                           Obter em: https://nvd.nist.gov/developers/request-an-api-key
@@ -243,6 +246,7 @@ while [[ $# -gt 0 ]]; do
         --debug)            DEBUG=true; shift ;;
         --force)            FORCE=true; shift ;;
         --stale-days)       STALE_DAYS="$2"; shift 2 ;;
+        --debug)            DEBUG=true; shift ;;
         --nvd-api-key)      NVD_API_KEY="$2"; shift 2 ;;
         --compare)          COMPARE_FILE="$2"; shift 2 ;;
         --fail-on)          FAIL_ON="$2"; shift 2 ;;
@@ -298,6 +302,15 @@ WARN_COUNT=0
 CURRENT_PHASE="init"
 
 mkdir -p "$OUT" "$TOOLS"
+
+# ── Modo debug — trace para ficheiro dedicado, sem poluir outputs ─
+if [[ "$DEBUG" == "true" ]]; then
+    DEBUG_LOG="${OUT}/debug_trace.log"
+    exec 9>"$DEBUG_LOG"
+    export BASH_XTRACEFD=9
+    PS4='+ [${SECONDS}s ${BASH_SOURCE}:${LINENO}] '
+    set -x
+fi
 
 # Inicializar logs estruturados — após mkdir
 echo "# audit_events.log — JSON Lines, todos os eventos. Filtrar com: jq 'select(.level==\"ERROR\")' $EVENT_LOG" > "$EVENT_LOG"
@@ -1235,8 +1248,15 @@ if [[ -x "$GRYPE_BIN" ]]; then
     echo ""
     timeout 300 "$GRYPE_BIN" --output json dir:/ \
         --exclude "/proc" --exclude "/sys" --exclude "/dev" --exclude "/run" \
-        --file "$GRYPE_JSON" 2>/dev/null || true
-    [[ -f "$GRYPE_JSON" ]] && GRYPE_JSON="$GRYPE_JSON" python3 - <<'PYEOF'
+        --file "$GRYPE_JSON" 2> "${OUT}/11_grype_stderr.log" || true
+    if [[ -s "$GRYPE_JSON" ]]; then
+        rm -f "${OUT}/11_grype_stderr.log"
+    else
+        echo "  [!] Grype JSON vazio — ver ${OUT}/11_grype_stderr.log"
+        echo "  --- stderr Grype ---"
+        tail -20 "${OUT}/11_grype_stderr.log" 2>/dev/null | sed 's/^/  /'
+    fi
+    [[ -s "$GRYPE_JSON" ]] && GRYPE_JSON="$GRYPE_JSON" python3 - <<'PYEOF'
 import json,os,sys
 gf=os.environ.get('GRYPE_JSON','')
 try:
