@@ -1196,8 +1196,15 @@ if [[ -x "$GRYPE_BIN" ]]; then
     echo ""
     timeout 300 "$GRYPE_BIN" --output json dir:/ \
         --exclude "/proc" --exclude "/sys" --exclude "/dev" --exclude "/run" \
-        --file "$GRYPE_JSON" 2>/dev/null || true
-    [[ -f "$GRYPE_JSON" ]] && GRYPE_JSON="$GRYPE_JSON" python3 - <<'PYEOF'
+        --file "$GRYPE_JSON" 2> "${OUT}/11_grype_stderr.log" || true
+    if [[ -s "$GRYPE_JSON" ]]; then
+        rm -f "${OUT}/11_grype_stderr.log"
+    else
+        echo "  [!] Grype JSON vazio — ver ${OUT}/11_grype_stderr.log"
+        echo "  --- stderr Grype ---"
+        tail -20 "${OUT}/11_grype_stderr.log" 2>/dev/null | sed 's/^/  /'
+    fi
+    [[ -s "$GRYPE_JSON" ]] && GRYPE_JSON="$GRYPE_JSON" python3 - <<'PYEOF'
 import json,os,sys
 gf=os.environ.get('GRYPE_JSON','')
 try:
