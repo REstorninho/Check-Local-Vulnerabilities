@@ -58,6 +58,27 @@ section() {
     echo -e "\n${CYAN}─── $* ───${NC}"
 }
 
+# Executa um comando (incluindo redirecções) em background mostrando o
+# tempo decorrido a cada poucos segundos, para acompanhar progresso de
+# tarefas longas (linPEAS, Trivy, Grype, etc.).
+# Uso: run_with_progress "Descrição" 'comando completo incl. > ficheiro 2>&1'
+run_with_progress() {
+    local desc="$1"; local cmd="$2"
+    eval "$cmd" &
+    local pid=$!
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 5
+        elapsed=$(( elapsed + 5 ))
+        printf "\r${CYAN}[~]${NC} %s... %ds" "$desc" "$elapsed" >&2
+    done
+    printf "\r" >&2
+    wait "$pid"
+    local rc=$?
+    echo -e "${GREEN}[+]${NC} $desc — concluído (${elapsed}s)"
+    return $rc
+}
+
 # ─── Sistema de Logging Estruturado (JSON Lines) ──────────────────
 # Escreve em audit_events.log (tudo) e audit_errors.log (só ERROR/WARN)
 # Formato JSON Line — filtrável com jq:
@@ -790,8 +811,7 @@ section "03 — Privesc"
 if [[ "$QUICK_MODE" == "true" ]]; then
     warn "03_linpeas saltado (--quick)"; echo "[saltado — modo rápido]" > "${OUT}/03_linpeas_skipped.txt"
 elif [[ -f "$LINPEAS" ]]; then
-    info "A correr linPEAS (2-5 min)..."
-    timeout 300 bash "$LINPEAS" -a > "${OUT}/03_linpeas.txt" 2>&1 || true
+    run_with_progress "linPEAS (até 5 min)" "timeout 300 bash '$LINPEAS' -a > '${OUT}/03_linpeas.txt' 2>&1" || true
     sz=$(stat -c%s "${OUT}/03_linpeas.txt" 2>/dev/null || echo 0)
     info "03_linpeas OK ($(( sz / 1024 )) KB)"
 else
@@ -838,17 +858,16 @@ if [[ -x "$TRIVY_BIN" ]] || command -v trivy &>/dev/null; then
     TRIVY_CMD=$(command -v trivy 2>/dev/null || echo "$TRIVY_BIN")
     if [[ "$DEEP_SCAN" == "true" ]]; then
         SCANNERS="vuln,secret,misconfig"
-        info "A correr Trivy (texto, deep scan: $SCANNERS)..."
     else
         SCANNERS="vuln"
-        info "A correr Trivy (texto, scanners: $SCANNERS)..."
     fi
-    timeout 600 "$TRIVY_CMD" fs / \
-        --scanners "$SCANNERS" \
+    run_with_progress "Trivy (texto, scanners: $SCANNERS, até 10 min)" \
+        "timeout 600 '$TRIVY_CMD' fs / \
+        --scanners '$SCANNERS' \
         --severity CRITICAL,HIGH,MEDIUM \
         --format table --no-progress --timeout 10m \
         --skip-dirs /proc,/sys,/dev,/run,/snap \
-        > "${OUT}/05_trivy.txt" 2>&1 || true
+        > '${OUT}/05_trivy.txt' 2>&1" || true
     info "05_trivy OK"
 else
     warn "Trivy não disponível — CVE check manual..."
