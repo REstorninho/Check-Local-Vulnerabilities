@@ -59,6 +59,36 @@ section() {
     echo -e "\n${CYAN}─── $* ───${NC}"
 }
 
+# Verdadeiro se o ficheiro não existir ou tiver mais de STALE_DAYS dias
+# (usado para refrescar binários em cache automaticamente)
+is_stale() {
+    local f="$1"
+    [[ -f "$f" ]] || return 0
+    [[ "$STALE_DAYS" -eq 0 ]] && return 1
+    [[ -n "$(find "$f" -mtime "+${STALE_DAYS}" 2>/dev/null)" ]]
+}
+
+# Executa um comando (incluindo redirecções) em background mostrando o
+# tempo decorrido a cada poucos segundos, para acompanhar progresso de
+# tarefas longas (linPEAS, Trivy, Grype, etc.).
+# Uso: run_with_progress "Descrição" 'comando completo incl. > ficheiro 2>&1'
+run_with_progress() {
+    local desc="$1"; local cmd="$2"
+    eval "$cmd" &
+    local pid=$!
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 5
+        elapsed=$(( elapsed + 5 ))
+        printf "\r${CYAN}[~]${NC} %s... %ds" "$desc" "$elapsed" >&2
+    done
+    printf "\r" >&2
+    wait "$pid"
+    local rc=$?
+    echo -e "${GREEN}[+]${NC} $desc — concluído (${elapsed}s)"
+    return $rc
+}
+
 # ─── Sistema de Logging Estruturado (JSON Lines) ──────────────────
 # Escreve em audit_events.log (tudo) e audit_errors.log (só ERROR/WARN)
 # Formato JSON Line — filtrável com jq:
@@ -142,6 +172,7 @@ QUICK_MODE=false
 NO_NVD=false
 NO_BROWSER=false
 FORCE=false
+STALE_DAYS=7
 DEEP_SCAN=false
 DEBUG=false
 CUSTOM_OUT=""
@@ -170,6 +201,8 @@ cat <<'EOF'
     --deep-scan           Activa Trivy secret+misconfig (mais lento)
     --debug               Output detalhado de downloads/erros (diagnóstico)
     --force               Re-download de ferramentas mesmo que existam
+    --stale-days N        Re-download automático se cache tiver mais de N
+                          dias (default: 7; 0 desactiva)
     --nvd-api-key KEY     NVD API key (também via env var NVD_API_KEY)
                           Com key: rate limit passa de 5/30s para 50/30s (10× mais rápido)
                           Obter em: https://nvd.nist.gov/developers/request-an-api-key
@@ -209,6 +242,7 @@ while [[ $# -gt 0 ]]; do
         --deep-scan)        DEEP_SCAN=true; shift ;;
         --debug)            DEBUG=true; shift ;;
         --force)            FORCE=true; shift ;;
+        --stale-days)       STALE_DAYS="$2"; shift 2 ;;
         --nvd-api-key)      NVD_API_KEY="$2"; shift 2 ;;
         --compare)          COMPARE_FILE="$2"; shift 2 ;;
         --fail-on)          FAIL_ON="$2"; shift 2 ;;
@@ -581,7 +615,7 @@ done
 LINPEAS="${TOOLS}/linpeas.sh"
 if [[ "$SKIP_DOWNLOAD" == "true" ]] && [[ -f "$LINPEAS" ]]; then
     info "linPEAS — cache OK (skip-download)"
-elif [[ ! -f "$LINPEAS" ]] && [[ "$SKIP_DOWNLOAD" == "false" ]]; then
+elif is_stale "$LINPEAS" && [[ "$SKIP_DOWNLOAD" == "false" ]]; then
     ensure_tool "linPEAS" "$LINPEAS" \
         "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh" 10000
 elif [[ ! -f "$LINPEAS" ]]; then
@@ -674,7 +708,7 @@ fi
 
 # ── Grype ─────────────────────────────────────────────────────────
 GRYPE_BIN="${TOOLS}/grype"
-if [[ ! -f "$GRYPE_BIN" ]] || [[ "$FORCE" == "true" ]]; then
+if is_stale "$GRYPE_BIN" || [[ "$FORCE" == "true" ]]; then
     info "A determinar versão do Grype..."
     GRYPE_VER=$(curl -fsSL "https://api.github.com/repos/anchore/grype/releases/latest" 2>/dev/null \
                 | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))" \
@@ -707,7 +741,7 @@ fi
 OSV_BIN="${TOOLS}/osv-scanner"
 OSV_CMD=""
 
-if [[ -f "$OSV_BIN" ]] && [[ "$FORCE" == "false" ]]; then
+if ! is_stale "$OSV_BIN" && [[ "$FORCE" == "false" ]]; then
     OSV_CMD="$OSV_BIN"
     sz=$(stat -c%s "$OSV_BIN" 2>/dev/null || echo 0)
     info "OSV-Scanner — cache OK ($(( sz / 1048576 )) MB)"
@@ -719,36 +753,25 @@ elif [[ "$SKIP_DOWNLOAD" == "false" ]] || [[ "$FORCE" == "true" ]]; then
     OSV_ZIP="${TOOLS}/osv_tmp.zip"
     OSV_TMP="${TOOLS}/osv_extracted"
 
-    # Determinar filtro de arquitectura para o asset
+    # Determinar filtro de arquitectura para o asset (binário raw, sem .zip)
     case "$ARCH" in
-        x86_64)  OSV_FILTER="*linux_amd64*.zip" ;;
-        aarch64) OSV_FILTER="*linux_arm64*.zip" ;;
-        armv7*)  OSV_FILTER="*linux_arm*.zip"   ;;
-        *)       OSV_FILTER="*linux_amd64*.zip" ;;
+        x86_64)  OSV_FILTER="osv-scanner_linux_amd64" ;;
+        aarch64) OSV_FILTER="osv-scanner_linux_arm64" ;;
+        armv7*)  OSV_FILTER="osv-scanner_linux_arm64" ;;
+        *)       OSV_FILTER="osv-scanner_linux_amd64" ;;
     esac
     # Fallback URL com versão conhecida
-    OSV_FALLBACK_URL="https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_2.3.8_linux_amd64.zip"
-    [[ "$ARCH" == "aarch64" ]] && OSV_FALLBACK_URL="https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_2.3.8_linux_arm64.zip"
+    OSV_FALLBACK_URL="https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64"
+    [[ "$ARCH" == "aarch64" ]] && OSV_FALLBACK_URL="https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_arm64"
 
     OSV_VER=$(github_release_download \
         "google/osv-scanner" "$OSV_FILTER" "$OSV_ZIP" 5000000 \
         "2.3.8" "$OSV_FALLBACK_URL" "$OSV_BIN") && {
-        mkdir -p "$OSV_TMP"
-        if unzip -q "$OSV_ZIP" -d "$OSV_TMP" 2>/dev/null; then
-            EXE_FOUND=$(find "$OSV_TMP" -type f \( -name "osv-scanner" -o -name "osv-scanner_*" \) \
-                        ! -name "*.zip" ! -name "*.sha256" 2>/dev/null | head -1)
-            if [[ -n "$EXE_FOUND" ]]; then
-                cp "$EXE_FOUND" "$OSV_BIN"
-                chmod +x "$OSV_BIN"
-                OSV_CMD="$OSV_BIN"
-                sz=$(stat -c%s "$OSV_BIN" 2>/dev/null || echo 0)
-                info "  OSV-Scanner v${OSV_VER} extraído OK ($(( sz / 1048576 )) MB)"
-            else
-                warn "  OSV-Scanner: binário não encontrado dentro do ZIP"
-            fi
-        else
-            warn "  OSV-Scanner: falha ao extrair ZIP"
-        fi
+        cp "$OSV_ZIP" "$OSV_BIN"
+        chmod +x "$OSV_BIN"
+        OSV_CMD="$OSV_BIN"
+        sz=$(stat -c%s "$OSV_BIN" 2>/dev/null || echo 0)
+        info "  OSV-Scanner v${OSV_VER} obtido OK ($(( sz / 1048576 )) MB)"
     } || warn "  OSV-Scanner: download falhou"
 
     # Limpar temporários sempre
@@ -761,13 +784,13 @@ fi
 # ── linux-exploit-suggester-2 ─────────────────────────────────────
 LES2="${TOOLS}/les2.pl"
 LES_SH="${TOOLS}/linux-exploit-suggester.sh"
-if [[ ! -f "$LES2" ]] || [[ "$FORCE" == "true" ]]; then
+if is_stale "$LES2" || [[ "$FORCE" == "true" ]]; then
     ensure_tool "linux-exploit-suggester-2" "$LES2" \
         "https://raw.githubusercontent.com/jondonas/linux-exploit-suggester-2/master/linux-exploit-suggester-2.pl" 2000
 else
     info "linux-exploit-suggester-2 — cache OK"
 fi
-if [[ ! -f "$LES_SH" ]] || [[ "$FORCE" == "true" ]]; then
+if is_stale "$LES_SH" || [[ "$FORCE" == "true" ]]; then
     ensure_tool "linux-exploit-suggester" "$LES_SH" \
         "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/master/linux-exploit-suggester.sh" 5000
 else
@@ -826,8 +849,7 @@ section "03 — Privesc"
 if [[ "$QUICK_MODE" == "true" ]]; then
     warn "03_linpeas saltado (--quick)"; echo "[saltado — modo rápido]" > "${OUT}/03_linpeas_skipped.txt"
 elif [[ -f "$LINPEAS" ]]; then
-    info "A correr linPEAS (2-5 min)..."
-    timeout 300 bash "$LINPEAS" -a > "${OUT}/03_linpeas.txt" 2>&1 || true
+    run_with_progress "linPEAS (até 5 min)" "timeout 300 bash '$LINPEAS' -a > '${OUT}/03_linpeas.txt' 2>&1" || true
     sz=$(stat -c%s "${OUT}/03_linpeas.txt" 2>/dev/null || echo 0)
     info "03_linpeas OK ($(( sz / 1024 )) KB)"
 else
@@ -874,17 +896,16 @@ if [[ -x "$TRIVY_BIN" ]] || command -v trivy &>/dev/null; then
     TRIVY_CMD=$(command -v trivy 2>/dev/null || echo "$TRIVY_BIN")
     if [[ "$DEEP_SCAN" == "true" ]]; then
         SCANNERS="vuln,secret,misconfig"
-        info "A correr Trivy (texto, deep scan: $SCANNERS)..."
     else
         SCANNERS="vuln"
-        info "A correr Trivy (texto, scanners: $SCANNERS)..."
     fi
-    timeout 600 "$TRIVY_CMD" fs / \
-        --scanners "$SCANNERS" \
+    run_with_progress "Trivy (texto, scanners: $SCANNERS, até 10 min)" \
+        "timeout 600 '$TRIVY_CMD' fs / \
+        --scanners '$SCANNERS' \
         --severity CRITICAL,HIGH,MEDIUM \
         --format table --no-progress --timeout 10m \
         --skip-dirs /proc,/sys,/dev,/run,/snap \
-        > "${OUT}/05_trivy.txt" 2>&1 || true
+        > '${OUT}/05_trivy.txt' 2>&1" || true
     info "05_trivy OK"
 else
     warn "Trivy não disponível — CVE check manual..."
