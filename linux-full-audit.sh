@@ -172,6 +172,7 @@ NO_NVD=false
 NO_BROWSER=false
 FORCE=false
 STALE_DAYS=7
+DEBUG=false
 DEEP_SCAN=false
 CUSTOM_OUT=""
 NVD_API_KEY="${NVD_API_KEY:-}"
@@ -200,6 +201,8 @@ cat <<'EOF'
     --force               Re-download de ferramentas mesmo que existam
     --stale-days N        Re-download automático se cache tiver mais de N
                           dias (default: 7; 0 desactiva)
+    --debug               Activa trace (set -x) para debug_trace.log,
+                          sem poluir os ficheiros de output das secções
     --nvd-api-key KEY     NVD API key (também via env var NVD_API_KEY)
                           Com key: rate limit passa de 5/30s para 50/30s (10× mais rápido)
                           Obter em: https://nvd.nist.gov/developers/request-an-api-key
@@ -239,6 +242,7 @@ while [[ $# -gt 0 ]]; do
         --deep-scan)        DEEP_SCAN=true; shift ;;
         --force)            FORCE=true; shift ;;
         --stale-days)       STALE_DAYS="$2"; shift 2 ;;
+        --debug)            DEBUG=true; shift ;;
         --nvd-api-key)      NVD_API_KEY="$2"; shift 2 ;;
         --compare)          COMPARE_FILE="$2"; shift 2 ;;
         --fail-on)          FAIL_ON="$2"; shift 2 ;;
@@ -294,6 +298,15 @@ WARN_COUNT=0
 CURRENT_PHASE="init"
 
 mkdir -p "$OUT" "$TOOLS"
+
+# ── Modo debug — trace para ficheiro dedicado, sem poluir outputs ─
+if [[ "$DEBUG" == "true" ]]; then
+    DEBUG_LOG="${OUT}/debug_trace.log"
+    exec 9>"$DEBUG_LOG"
+    export BASH_XTRACEFD=9
+    PS4='+ [${SECONDS}s ${BASH_SOURCE}:${LINENO}] '
+    set -x
+fi
 
 # Inicializar logs estruturados — após mkdir
 echo "# audit_events.log — JSON Lines, todos os eventos. Filtrar com: jq 'select(.level==\"ERROR\")' $EVENT_LOG" > "$EVENT_LOG"
