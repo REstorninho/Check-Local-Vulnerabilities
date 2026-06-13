@@ -176,7 +176,6 @@ FORCE=false
 STALE_DAYS=7
 DEBUG=false
 DEEP_SCAN=false
-DEBUG=false
 CUSTOM_OUT=""
 NVD_API_KEY="${NVD_API_KEY:-}"
 COMPARE_FILE=""
@@ -201,12 +200,12 @@ cat <<'EOF'
     -n, --no-nvd          Salta consulta NVD (modo offline)
     --no-browser          Não abre relatório no browser
     --deep-scan           Activa Trivy secret+misconfig (mais lento)
-    --debug               Output detalhado de downloads/erros (diagnóstico)
     --force               Re-download de ferramentas mesmo que existam
     --stale-days N        Re-download automático se cache tiver mais de N
                           dias (default: 7; 0 desactiva)
-    --debug               Activa trace (set -x) para debug_trace.log,
-                          sem poluir os ficheiros de output das secções
+    --debug               Output detalhado de downloads/erros (diagnóstico) +
+                          trace (set -x) para debug_trace.log, sem poluir
+                          os ficheiros de output das secções
     --check-tools         Apenas verifica/descarrega ferramentas e DBs
                           (Fase 1) e sai, sem correr scans
     --nvd-api-key KEY     NVD API key (também via env var NVD_API_KEY)
@@ -249,7 +248,6 @@ while [[ $# -gt 0 ]]; do
         --debug)            DEBUG=true; shift ;;
         --force)            FORCE=true; shift ;;
         --stale-days)       STALE_DAYS="$2"; shift 2 ;;
-        --debug)            DEBUG=true; shift ;;
         --check-tools)      CHECK_TOOLS=true; shift ;;
         --nvd-api-key)      NVD_API_KEY="$2"; shift 2 ;;
         --compare)          COMPARE_FILE="$2"; shift 2 ;;
@@ -465,7 +463,7 @@ try:
 except: pass
 " 2>/dev/null || echo "")
         [[ -n "$found_url" ]] && asset_url="$found_url"
-        info "  v${ver} — $(basename "$asset_url")"
+        echo -e "${GREEN}[+]${NC}   v${ver} — $(basename "$asset_url")" >&2
         [[ -z "$found_url" ]] && dbg "github_release_download: nenhum asset coincide com filtro '${asset_filter}' — a usar fallback URL"
     else
         warn "  GitHub API inacessível — a usar fallback v${fallback_ver}"
@@ -1414,7 +1412,7 @@ for key in "${!APP_BINS[@]}"; do
     IFS='|' read -r display binary ver_flag category nvd_kw <<< "${APP_BINS[$key]}"
     binary_path=$(command -v "$binary" 2>/dev/null || true)
     [[ -z "$binary_path" ]] && continue
-    ver=$("$binary" "$ver_flag" 2>&1 | grep -oP '\d+\.\d+[\.\d-p]*' | head -1 || true)
+    ver=$("$binary" "$ver_flag" 2>&1 | grep -oP '\d+\.\d+[\.\dp-]*' | head -1 || true)
     [[ -z "$ver" ]] && continue
     add_inv "$key" "$display" "$ver" "$category" "$nvd_kw" "binary"
 done
@@ -1442,7 +1440,7 @@ case "$PKG_MGR" in
     apk)
         while IFS= read -r line; do
             pkg=$(echo "$line" | grep -oP '^[a-z0-9_-]+' || true)
-            ver=$(echo "$line" | grep -oP '\d+\.\d+[\.\d-r]*' | head -1 || true)
+            ver=$(echo "$line" | grep -oP '\d+\.\d+[\.\dr-]*' | head -1 || true)
             [[ -z "$pkg" || -z "$ver" ]] && continue
             add_inv "pkg_${pkg}" "$pkg" "$ver" "Package" "$pkg" "apk"
         done < <(apk list --installed 2>/dev/null | head -1500) ;;
@@ -1492,7 +1490,7 @@ fi
 # Construir cve_results.json a partir de Trivy + Grype + NVD
 TRIVY_JSON="$TRIVY_JSON" GRYPE_JSON="$GRYPE_JSON" INV_FILE="$INV_FILE" NO_NVD="$NO_NVD" \
 NVD_API_KEY="$NVD_API_KEY" \
-python3 - <<'PYEOF' > "$CVE_FILE" 2>/dev/null
+python3 - <<'PYEOF' > "$CVE_FILE" 2>"${OUT}/cve_aggregation_stderr.log"
 import json, urllib.request, urllib.parse, time, sys, os
 
 results = []
@@ -1634,6 +1632,10 @@ PYEOF
 
 CVE_TOTAL=$(python3 -c "import json; print(len(json.load(open('${CVE_FILE}'))))" 2>/dev/null || echo "?")
 info "CVEs: ${CVE_TOTAL} total → ${CVE_FILE}"
+if [[ -s "${OUT}/cve_aggregation_stderr.log" ]]; then
+    cat "${OUT}/cve_aggregation_stderr.log"
+    rm -f "${OUT}/cve_aggregation_stderr.log"
+fi
 
 # ═══════════════════════════════════════════════════════════════════
 # FASE 4.5 — EXPORTS (CSV + SARIF) e COMPARAÇÃO (#1 + #3)
