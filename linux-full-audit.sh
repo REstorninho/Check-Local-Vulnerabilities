@@ -58,6 +58,15 @@ section() {
     echo -e "\n${CYAN}─── $* ───${NC}"
 }
 
+# Verdadeiro se o ficheiro não existir ou tiver mais de STALE_DAYS dias
+# (usado para refrescar binários em cache automaticamente)
+is_stale() {
+    local f="$1"
+    [[ -f "$f" ]] || return 0
+    [[ "$STALE_DAYS" -eq 0 ]] && return 1
+    [[ -n "$(find "$f" -mtime "+${STALE_DAYS}" 2>/dev/null)" ]]
+}
+
 # Executa um comando (incluindo redirecções) em background mostrando o
 # tempo decorrido a cada poucos segundos, para acompanhar progresso de
 # tarefas longas (linPEAS, Trivy, Grype, etc.).
@@ -162,6 +171,7 @@ QUICK_MODE=false
 NO_NVD=false
 NO_BROWSER=false
 FORCE=false
+STALE_DAYS=7
 DEEP_SCAN=false
 CUSTOM_OUT=""
 NVD_API_KEY="${NVD_API_KEY:-}"
@@ -188,6 +198,8 @@ cat <<'EOF'
     --no-browser          Não abre relatório no browser
     --deep-scan           Activa Trivy secret+misconfig (mais lento)
     --force               Re-download de ferramentas mesmo que existam
+    --stale-days N        Re-download automático se cache tiver mais de N
+                          dias (default: 7; 0 desactiva)
     --nvd-api-key KEY     NVD API key (também via env var NVD_API_KEY)
                           Com key: rate limit passa de 5/30s para 50/30s (10× mais rápido)
                           Obter em: https://nvd.nist.gov/developers/request-an-api-key
@@ -226,6 +238,7 @@ while [[ $# -gt 0 ]]; do
         --no-browser)       NO_BROWSER=true; shift ;;
         --deep-scan)        DEEP_SCAN=true; shift ;;
         --force)            FORCE=true; shift ;;
+        --stale-days)       STALE_DAYS="$2"; shift 2 ;;
         --nvd-api-key)      NVD_API_KEY="$2"; shift 2 ;;
         --compare)          COMPARE_FILE="$2"; shift 2 ;;
         --fail-on)          FAIL_ON="$2"; shift 2 ;;
@@ -577,7 +590,7 @@ done
 LINPEAS="${TOOLS}/linpeas.sh"
 if [[ "$SKIP_DOWNLOAD" == "true" ]] && [[ -f "$LINPEAS" ]]; then
     info "linPEAS — cache OK (skip-download)"
-elif [[ ! -f "$LINPEAS" ]] && [[ "$SKIP_DOWNLOAD" == "false" ]]; then
+elif is_stale "$LINPEAS" && [[ "$SKIP_DOWNLOAD" == "false" ]]; then
     ensure_tool "linPEAS" "$LINPEAS" \
         "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh" 10000
 elif [[ ! -f "$LINPEAS" ]]; then
@@ -670,7 +683,7 @@ fi
 
 # ── Grype ─────────────────────────────────────────────────────────
 GRYPE_BIN="${TOOLS}/grype"
-if [[ ! -f "$GRYPE_BIN" ]] || [[ "$FORCE" == "true" ]]; then
+if is_stale "$GRYPE_BIN" || [[ "$FORCE" == "true" ]]; then
     info "A determinar versão do Grype..."
     GRYPE_VER=$(curl -fsSL "https://api.github.com/repos/anchore/grype/releases/latest" 2>/dev/null \
                 | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))" \
@@ -703,7 +716,7 @@ fi
 OSV_BIN="${TOOLS}/osv-scanner"
 OSV_CMD=""
 
-if [[ -f "$OSV_BIN" ]] && [[ "$FORCE" == "false" ]]; then
+if ! is_stale "$OSV_BIN" && [[ "$FORCE" == "false" ]]; then
     OSV_CMD="$OSV_BIN"
     sz=$(stat -c%s "$OSV_BIN" 2>/dev/null || echo 0)
     info "OSV-Scanner — cache OK ($(( sz / 1048576 )) MB)"
@@ -746,13 +759,13 @@ fi
 # ── linux-exploit-suggester-2 ─────────────────────────────────────
 LES2="${TOOLS}/les2.pl"
 LES_SH="${TOOLS}/linux-exploit-suggester.sh"
-if [[ ! -f "$LES2" ]] || [[ "$FORCE" == "true" ]]; then
+if is_stale "$LES2" || [[ "$FORCE" == "true" ]]; then
     ensure_tool "linux-exploit-suggester-2" "$LES2" \
         "https://raw.githubusercontent.com/jondonas/linux-exploit-suggester-2/master/linux-exploit-suggester-2.pl" 2000
 else
     info "linux-exploit-suggester-2 — cache OK"
 fi
-if [[ ! -f "$LES_SH" ]] || [[ "$FORCE" == "true" ]]; then
+if is_stale "$LES_SH" || [[ "$FORCE" == "true" ]]; then
     ensure_tool "linux-exploit-suggester" "$LES_SH" \
         "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/master/linux-exploit-suggester.sh" 5000
 else
