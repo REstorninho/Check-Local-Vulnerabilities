@@ -1098,34 +1098,8 @@ if (Test-Path $WatsonBin) {
         $proc.WaitForExit(60000); $patchOut.Add($watsonResult); Write-Info "Watson OK"
     } catch { $patchOut.Add("[!] Watson erro: $($_.Exception.Message)") }
 } else {
-    $patchOut.Add("[Watson não disponível — checks inline]"); $patchOut.Add("")
-    function Test-KB { param([string]$KB); return ($hotfixes -contains $KB) }
-    $knownCves = @(
-        [PSCustomObject]@{ CVE="CVE-2025-21333"; Sev="CRÍTICO"; Name="Hyper-V NT Kernel EoP (exploited)"; KB=@("KB5050009","KB5050011","KB5050013","KB5050014"); MinBuild=19041 }
-        [PSCustomObject]@{ CVE="CVE-2025-24983"; Sev="HIGH";    Name="Win32k UAF EoP (exploited)";       KB=@("KB5053598","KB5053599"); MinBuild=0 }
-        [PSCustomObject]@{ CVE="CVE-2025-26633"; Sev="HIGH";    Name="MSC EvilTwin (exploited)";         KB=@("KB5053598","KB5053599"); MinBuild=0 }
-        [PSCustomObject]@{ CVE="CVE-2024-38080"; Sev="CRÍTICO"; Name="Hyper-V EoP (exploited)";         KB=@("KB5040427","KB5040430"); MinBuild=19041 }
-        [PSCustomObject]@{ CVE="CVE-2024-21338"; Sev="CRÍTICO"; Name="AppLocker Driver EoP";             KB=@("KB5034763","KB5034765"); MinBuild=19041 }
-        [PSCustomObject]@{ CVE="CVE-2023-28252"; Sev="CRÍTICO"; Name="CLFS EoP (exploited)";             KB=@("KB5025221","KB5025224"); MinBuild=0 }
-        [PSCustomObject]@{ CVE="CVE-2022-0847";  Sev="CRÍTICO"; Name="PrintNightmare Spooler";           KB=@("KB5010386","KB5010392"); MinBuild=0 }
-        [PSCustomObject]@{ CVE="CVE-2021-34527"; Sev="CRÍTICO"; Name="PrintNightmare";                   KB=@("KB5004945","KB5004946"); MinBuild=0 }
-        [PSCustomObject]@{ CVE="CVE-2021-36934"; Sev="CRÍTICO"; Name="HiveNightmare/SeriousSAM";         KB=@("KB5005010","KB5005030"); MinBuild=0 }
-        [PSCustomObject]@{ CVE="CVE-2020-0796";  Sev="CRÍTICO"; Name="SMBGhost";                         KB=@("KB4551762"); MinBuild=18362 }
-        [PSCustomObject]@{ CVE="CVE-2020-1472";  Sev="CRÍTICO"; Name="ZeroLogon (Netlogon)";             KB=@("KB4571694","KB4571702"); MinBuild=0 }
-        [PSCustomObject]@{ CVE="CVE-2019-0708";  Sev="CRÍTICO"; Name="BlueKeep (RDP RCE)";               KB=@("KB4499175","KB4499180"); MinBuild=0 }
-        [PSCustomObject]@{ CVE="CVE-2017-0144";  Sev="CRÍTICO"; Name="EternalBlue (SMBv1)";              KB=@("KB4012212","KB4013429"); MinBuild=0 }
-    )
-    $found = 0
-    foreach ($e in $knownCves) {
-        if ($e.MinBuild -gt 0 -and [int]$osBuild -lt $e.MinBuild) { continue }
-        $patched = $e.KB | Where-Object { $hotfixes -contains $_ }
-        if (-not $patched) {
-            $patchOut.Add("  $($e.Sev): $($e.CVE) — $($e.Name)")
-            $patchOut.Add("  KBs: $($e.KB -join ', ')"); $patchOut.Add(""); $found++
-        }
-    }
-    if ($found -eq 0) { $patchOut.Add("  OK: Nenhum CVE conhecido não-patchado detectado") }
-    else { $patchOut.Add("TOTAL não-patchados: $found") }
+    $patchOut.Add("[Watson não disponível — Camada C saltada]")
+    $patchOut.Add("[!] Para detecção de CVEs de kernel/EoP, confiar em WES-NG (Camada A) e MSRC API (Camada B), ou instalar Watson.")
 }
 $patchOut | Out-File "$Out\11_patch_gap.txt" -Encoding UTF8; Write-Info "11_patch_gap OK"
 
