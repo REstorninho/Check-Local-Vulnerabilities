@@ -38,6 +38,7 @@ RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 CYAN='\033[0;36m'; MAGENTA='\033[0;35m'; BOLD='\033[1m'; NC='\033[0m'
 
 info()    { echo -e "${GREEN}[+]${NC} $*"; }
+dbg()     { [[ "$DEBUG" == "true" ]] && echo -e "${CYAN}[DEBUG]${NC} $*" >&2; return 0; }
 warn()    {
     echo -e "${YELLOW}[!]${NC} $*"
     log_jsonl "WARN" "$*"
@@ -142,6 +143,7 @@ NO_NVD=false
 NO_BROWSER=false
 FORCE=false
 DEEP_SCAN=false
+DEBUG=false
 CUSTOM_OUT=""
 NVD_API_KEY="${NVD_API_KEY:-}"
 COMPARE_FILE=""
@@ -166,6 +168,7 @@ cat <<'EOF'
     -n, --no-nvd          Salta consulta NVD (modo offline)
     --no-browser          Não abre relatório no browser
     --deep-scan           Activa Trivy secret+misconfig (mais lento)
+    --debug               Output detalhado de downloads/erros (diagnóstico)
     --force               Re-download de ferramentas mesmo que existam
     --nvd-api-key KEY     NVD API key (também via env var NVD_API_KEY)
                           Com key: rate limit passa de 5/30s para 50/30s (10× mais rápido)
@@ -204,6 +207,7 @@ while [[ $# -gt 0 ]]; do
         -n|--no-nvd)        NO_NVD=true; shift ;;
         --no-browser)       NO_BROWSER=true; shift ;;
         --deep-scan)        DEEP_SCAN=true; shift ;;
+        --debug)            DEBUG=true; shift ;;
         --force)            FORCE=true; shift ;;
         --nvd-api-key)      NVD_API_KEY="$2"; shift 2 ;;
         --compare)          COMPARE_FILE="$2"; shift 2 ;;
@@ -333,30 +337,46 @@ safe_download() {
     local curl_err; curl_err=$(mktemp 2>/dev/null) || curl_err="/tmp/curl_err_$$"
     local sz=0
 
+    dbg "safe_download: a tentar '$url' -> '$dest' (min_bytes=$min_bytes)"
+
     # Tentativa 1: curl com proxy do sistema (--proxy-negotiate honra $http_proxy/$https_proxy)
     if curl -fsSL --connect-timeout 30 --max-time 120 \
             --proxy-negotiate --anyauth \
             -o "$dest" "$url" 2>"$curl_err"; then
         sz=$(stat -c%s "$dest" 2>/dev/null || stat -f%z "$dest" 2>/dev/null || echo 0)
+        dbg "safe_download: tentativa 1 (curl+proxy) OK, sz=${sz}"
         if [[ "$sz" -ge "$min_bytes" ]]; then rm -f "$curl_err"; return 0; fi
+        dbg "safe_download: tentativa 1 ficheiro pequeno demais (${sz} < ${min_bytes}), a descartar"
         rm -f "$dest"
+    else
+        dbg "safe_download: tentativa 1 (curl+proxy) falhou: $(head -c 200 "$curl_err" 2>/dev/null)"
     fi
 
     # Tentativa 2: curl com --insecure (alguns proxies SSL inspection quebram o certificado)
     if curl -fsSL --connect-timeout 30 --max-time 120 --insecure \
             -o "$dest" "$url" 2>>"$curl_err"; then
         sz=$(stat -c%s "$dest" 2>/dev/null || echo 0)
+        dbg "safe_download: tentativa 2 (curl --insecure) OK, sz=${sz}"
         if [[ "$sz" -ge "$min_bytes" ]]; then rm -f "$curl_err"; return 0; fi
+        dbg "safe_download: tentativa 2 ficheiro pequeno demais (${sz} < ${min_bytes}), a descartar"
         rm -f "$dest"
+    else
+        dbg "safe_download: tentativa 2 (curl --insecure) falhou: $(tail -c 200 "$curl_err" 2>/dev/null)"
     fi
 
     # Tentativa 3: wget como alternativa (stack HTTP diferente do curl)
     if command -v wget &>/dev/null; then
         if wget -q --timeout=120 --tries=2 -O "$dest" "$url" 2>>"$curl_err"; then
             sz=$(stat -c%s "$dest" 2>/dev/null || echo 0)
+            dbg "safe_download: tentativa 3 (wget) OK, sz=${sz}"
             if [[ "$sz" -ge "$min_bytes" ]]; then rm -f "$curl_err"; return 0; fi
+            dbg "safe_download: tentativa 3 ficheiro pequeno demais (${sz} < ${min_bytes}), a descartar"
             rm -f "$dest"
+        else
+            dbg "safe_download: tentativa 3 (wget) falhou: $(tail -c 200 "$curl_err" 2>/dev/null)"
         fi
+    else
+        dbg "safe_download: wget não disponível, a saltar tentativa 3"
     fi
 
     local em; em=$(head -c 200 "$curl_err" 2>/dev/null)
@@ -379,6 +399,7 @@ github_release_download() {
 
     # 1. Obter metadados via API
     local api_resp
+    dbg "github_release_download: a consultar release de '${repo}' (filtro='${asset_filter}')"
     api_resp=$(curl -fsSL --max-time 15 "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null) || api_resp=""
     if [[ -n "$api_resp" ]]; then
         ver=$(echo "$api_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))" 2>/dev/null || echo "$fallback_ver")
@@ -394,14 +415,18 @@ except: pass
 " 2>/dev/null || echo "")
         [[ -n "$found_url" ]] && asset_url="$found_url"
         info "  v${ver} — $(basename "$asset_url")"
+        [[ -z "$found_url" ]] && dbg "github_release_download: nenhum asset coincide com filtro '${asset_filter}' — a usar fallback URL"
     else
         warn "  GitHub API inacessível — a usar fallback v${fallback_ver}"
+        dbg "github_release_download: resposta vazia da API GitHub para '${repo}'"
     fi
+    dbg "github_release_download: asset_url='${asset_url}'"
     [[ -z "$asset_url" ]] && { warn "  Sem URL de download disponível"; return 1; }
 
     # 2. Teste rápido de conectividade ao host (5s) — evitar múltiplas tentativas inúteis
     local download_host
     download_host=$(python3 -c "from urllib.parse import urlparse; print(urlparse('${asset_url}').netloc)" 2>/dev/null                     || echo "objects.githubusercontent.com")
+    dbg "github_release_download: a testar conectividade a ${download_host}"
     if ! curl -fsSL --max-time 5 --head "https://${download_host}" -o /dev/null 2>/dev/null; then
         local tool_name; tool_name=$(basename "$repo")
         warn "  ${download_host} inacessível (firewall/proxy)"
@@ -1035,7 +1060,11 @@ echo "  Latest ${KERNEL_SERIES}: ${LATEST_KERNEL}"
 # ── Camada C: CVEs inline ────────────────────────────────────────
 echo ""; echo "══ CAMADA C — CVEs de kernel conhecidos (offline) ══"; echo ""
 KV=$(echo "$KERNEL_FULL" | grep -oE "^[0-9]+\.[0-9]+\.[0-9]+")
-[[ -z "$KV" ]] && KV=$(echo "$KERNEL_FULL" | grep -oE "^[0-9]+\.[0-9]+" | awk '{print $1".0"}')
+if [[ -z "$KV" ]]; then
+    _kv2=$(echo "$KERNEL_FULL" | grep -oE "^[0-9]+\.[0-9]+")
+    if [[ -n "$_kv2" ]]; then KV="${_kv2}.0"; else KV="0.0.0"; fi
+    unset _kv2
+fi
 FOUND_CVES=0
 
 kernel_lt() {
@@ -1050,6 +1079,13 @@ kernel_le() {
     v2=$(echo "$2" | awk -F'[.-]' '{printf "%05d%05d%05d",$1,$2,$3}')
     [ "$v1" -le "$v2" ]
 }
+# Comparação de versão genérica (para ferramentas como pkexec, runc)
+ver_lt() {
+    local v1 v2
+    v1=$(echo "$1" | awk -F'[^0-9]+' '{printf "%05d%05d%05d",$1+0,$2+0,$3+0}')
+    v2=$(echo "$2" | awk -F'[^0-9]+' '{printf "%05d%05d%05d",$1+0,$2+0,$3+0}')
+    [ "$v1" -lt "$v2" ]
+}
 
 check_cve() {
     local cve="$1" sev="$2" name="$3" fixed_in="$4" note="$5"
@@ -1060,6 +1096,9 @@ check_cve() {
     fi
 }
 
+check_cve "CVE-2026-43500" "CRÍTICO" "Dirty Frag — RxRPC page-cache write (LPE, exploit público)"  "7.1.0"  "Sem patch upstream ainda — desactivar rxrpc como mitigação"
+check_cve "CVE-2026-43284" "CRÍTICO" "Dirty Frag — ESP/xfrm page-cache write (LPE, exploit público)" "7.1.0"  "Exploited in-the-wild — desactivar esp4/esp6 como mitigação"
+check_cve "CVE-2026-31431" "CRÍTICO" "Copy Fail — algif_aead LPE (732 bytes to root, exploit público)" "6.18.22" "Exploited in-the-wild — afecta todos os kernels desde 2017"
 check_cve "CVE-2024-1086"  "CRÍTICO" "nf_tables use-after-free (LPE/container escape)" "6.6.15" "Exploited in-the-wild"
 check_cve "CVE-2024-0646"  "CRÍTICO" "mremap() out-of-bounds write"                    "6.6.6"  "Kernel memory corruption LPE"
 check_cve "CVE-2024-26581" "HIGH"    "nft_set_rbtree UAF"                               "6.7.3"  "netfilter UAF"
@@ -1080,14 +1119,14 @@ check_cve "CVE-2016-5195"  "CRÍTICO" "Dirty COW"                               
 # Checks específicos de distro
 command -v pkexec &>/dev/null && {
     PKEXEC_VER=$(pkexec --version 2>/dev/null | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
-    [[ -n "$PKEXEC_VER" ]] && kernel_lt "$PKEXEC_VER" "0.120" && \
+    [[ -n "$PKEXEC_VER" ]] && ver_lt "$PKEXEC_VER" "0.120.0" && \
         echo "  CRÍTICO: CVE-2021-4034 (PwnKit) — pkexec ${PKEXEC_VER} < 0.120 — CWE-269"
 }
 echo "${DISTRO_ID}" | grep -qi "ubuntu" && kernel_lt "$KV" "6.2.0" && \
     echo "  CRÍTICO: CVE-2023-2640 + CVE-2023-32629 (overlayfs Ubuntu)"
 command -v runc &>/dev/null && {
     RUNC_VER=$(runc --version 2>/dev/null | grep "runc version" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
-    [[ -n "$RUNC_VER" ]] && kernel_lt "$RUNC_VER" "1.1.12" && \
+    [[ -n "$RUNC_VER" ]] && ver_lt "$RUNC_VER" "1.1.12" && \
         echo "  CRÍTICO: CVE-2024-21626 (Leaky Vessels) — runc ${RUNC_VER} < 1.1.12"
 }
 
