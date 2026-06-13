@@ -696,39 +696,50 @@ if (Test-Path $WatsonBin) {
     $WatsonCmd = (Get-Command Watson).Source
     Write-Info "Watson — sistema OK"
 } elseif (-not $SkipDownload) {
-    Write-Info "A determinar versão mais recente do Watson (jazzband)..."
-    # Watson usa source archive: /archive/refs/tags/<ver>.zip
+    Write-Info "A determinar versão mais recente do Watson (rasta-mouse)..."
     $watsonZip = "$Tools\watson_tmp.zip"
     $watsonTmp = "$Tools\watson_extracted"
     try {
-        # Obter última tag via API de tags (Watson não usa releases formais)
-        $watsonVer = "2.1.0"  # fallback
+        $watsonUrl = $null; $watsonVer = "unknown"
         try {
-            $tags = Invoke-RestMethod "https://api.github.com/repos/jazzband/Watson/tags" -TimeoutSec 15 -ErrorAction Stop
-            if ($tags -and $tags.Count -gt 0) { $watsonVer = $tags[0].name.TrimStart("v") }
-        } catch { Write-Warn "  Watson: GitHub API inacessível — a usar v${watsonVer}" }
+            $rel = Invoke-RestMethod "https://api.github.com/repos/rasta-mouse/Watson/releases/latest" -TimeoutSec 15 -ErrorAction Stop
+            $watsonVer = $rel.tag_name.TrimStart("v")
+            $asset = $rel.assets | Where-Object { $_.name -match "Watson.*\.(exe|zip)$" } | Select-Object -First 1
+            if ($asset) { $watsonUrl = $asset.browser_download_url }
+        } catch { Write-Warn "  Watson: GitHub API inacessível" }
 
-        # URL do source archive (não precisa de objects.githubusercontent.com)
-        $watsonUrl = "https://github.com/jazzband/Watson/archive/refs/tags/${watsonVer}.zip"
-        Write-Info "  Watson v${watsonVer} — a descarregar source archive..."
-
-        if (Safe-Download -Url $watsonUrl -Dest $watsonZip -MinBytes 20000) {
-            New-Item -ItemType Directory -Force -Path $watsonTmp | Out-Null
-            Expand-Archive -Path $watsonZip -DestinationPath $watsonTmp -Force -ErrorAction Stop
-            $exeFound = Get-ChildItem -Path $watsonTmp -Filter "Watson.exe" -Recurse -ErrorAction SilentlyContinue |
-                        Select-Object -First 1
-            if ($exeFound) {
-                Copy-Item $exeFound.FullName $WatsonBin -Force
-                $WatsonCmd = $WatsonBin
-                $sz = [math]::Round((Get-Item $WatsonBin).Length / 1KB)
-                Write-Info "  Watson v${watsonVer} extraído OK ($sz KB)"
-            } else {
-                Write-Warn "  Watson: Watson.exe não encontrado no archive (só source code)"
-                Write-Warn "  Watson: compilação necessária — CVEs inline na fase 11 cobrem os casos principais"
-            }
+        if (-not $watsonUrl) {
+            Write-Warn "  Watson: nenhum release com binário pré-compilado disponível"
+            Write-Warn "  Watson: requer compilação manual (.NET) — ver https://github.com/rasta-mouse/Watson"
         } else {
-            Write-Warn "  Watson: download falhou"
-            Write-Warn "  Manual: $watsonUrl → extrair Watson.exe → $WatsonBin"
+            Write-Info "  Watson v${watsonVer} — $watsonUrl"
+            if ($watsonUrl -match "\.zip$") {
+                if (Safe-Download -Url $watsonUrl -Dest $watsonZip -MinBytes 5000) {
+                    New-Item -ItemType Directory -Force -Path $watsonTmp | Out-Null
+                    Expand-Archive -Path $watsonZip -DestinationPath $watsonTmp -Force -ErrorAction Stop
+                    $exeFound = Get-ChildItem -Path $watsonTmp -Filter "Watson.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($exeFound) {
+                        Copy-Item $exeFound.FullName $WatsonBin -Force
+                        $WatsonCmd = $WatsonBin
+                        $sz = [math]::Round((Get-Item $WatsonBin).Length / 1KB)
+                        Write-Info "  Watson v${watsonVer} extraído OK ($sz KB)"
+                    } else {
+                        Write-Warn "  Watson: Watson.exe não encontrado no ZIP"
+                    }
+                } else {
+                    Write-Warn "  Watson: download falhou"
+                    Write-Warn "  Manual: $watsonUrl → extrair Watson.exe → $WatsonBin"
+                }
+            } else {
+                if (Safe-Download -Url $watsonUrl -Dest $WatsonBin -MinBytes 5000) {
+                    $WatsonCmd = $WatsonBin
+                    $sz = [math]::Round((Get-Item $WatsonBin).Length / 1KB)
+                    Write-Info "  Watson v${watsonVer} OK ($sz KB)"
+                } else {
+                    Write-Warn "  Watson: download falhou"
+                    Write-Warn "  Manual: $watsonUrl → $WatsonBin"
+                }
+            }
         }
     } catch {
         Write-Warn "  Watson: $($_.Exception.Message)"
@@ -737,7 +748,7 @@ if (Test-Path $WatsonBin) {
         Remove-Item $watsonTmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    if (-not $WatsonCmd) { Write-Warn "  Watson: não disponível — CVEs inline na fase 11 continuam activos" }
+    if (-not $WatsonCmd) { Write-Warn "  Watson: não disponível — Camada C (fase 11) será saltada" }
 }
 
 # Actualizar referência usada na fase 11
