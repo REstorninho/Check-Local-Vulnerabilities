@@ -732,17 +732,45 @@ elif [[ "$SKIP_DOWNLOAD" == "false" ]] || [[ "$FORCE" == "true" ]]; then
 fi
 
 # ── linux-exploit-suggester-2 ─────────────────────────────────────
+# As regras/CVEs ficam embutidas no script — forçar refresh se cache > 30 dias
 LES2="${TOOLS}/les2.pl"
 LES_SH="${TOOLS}/linux-exploit-suggester.sh"
+MAX_AGE_DAYS=30
+
+is_stale() {
+    local f="$1" age_sec now mtime
+    [[ -f "$f" ]] || return 1
+    now=$(date +%s)
+    mtime=$(stat -c%Y "$f" 2>/dev/null || stat -f%m "$f" 2>/dev/null || echo "$now")
+    age_sec=$(( now - mtime ))
+    [[ "$age_sec" -gt $(( MAX_AGE_DAYS * 86400 )) ]]
+}
+
 if [[ ! -f "$LES2" ]] || [[ "$FORCE" == "true" ]]; then
     ensure_tool "linux-exploit-suggester-2" "$LES2" \
         "https://raw.githubusercontent.com/jondonas/linux-exploit-suggester-2/master/linux-exploit-suggester-2.pl" 2000
+elif is_stale "$LES2"; then
+    warn "linux-exploit-suggester-2 — cache > ${MAX_AGE_DAYS} dias, a actualizar..."
+    cp "$LES2" "${LES2}.bak"
+    rm -f "$LES2"
+    ensure_tool "linux-exploit-suggester-2" "$LES2" \
+        "https://raw.githubusercontent.com/jondonas/linux-exploit-suggester-2/master/linux-exploit-suggester-2.pl" 2000 \
+        || { warn "  Falha ao actualizar — a restaurar versão em cache"; mv "${LES2}.bak" "$LES2"; }
+    rm -f "${LES2}.bak"
 else
     info "linux-exploit-suggester-2 — cache OK"
 fi
 if [[ ! -f "$LES_SH" ]] || [[ "$FORCE" == "true" ]]; then
     ensure_tool "linux-exploit-suggester" "$LES_SH" \
         "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/master/linux-exploit-suggester.sh" 5000
+elif is_stale "$LES_SH"; then
+    warn "linux-exploit-suggester — cache > ${MAX_AGE_DAYS} dias, a actualizar..."
+    cp "$LES_SH" "${LES_SH}.bak"
+    rm -f "$LES_SH"
+    ensure_tool "linux-exploit-suggester" "$LES_SH" \
+        "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/master/linux-exploit-suggester.sh" 5000 \
+        || { warn "  Falha ao actualizar — a restaurar versão em cache"; mv "${LES_SH}.bak" "$LES_SH"; }
+    rm -f "${LES_SH}.bak"
 else
     info "linux-exploit-suggester — cache OK"
 fi

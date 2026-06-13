@@ -307,6 +307,12 @@ function Safe-Download {
     return $false
 }
 
+$MaxAgeDays = 30
+function Is-Stale {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $false }
+    return ((Get-Date) - (Get-Item $Path).LastWriteTime).TotalDays -gt $MaxAgeDays
+}
 function Ensure-Tool {
     param([string]$Name, [string]$Dest, [string[]]$Urls, [int]$MinBytes = 10240)
     if ((Test-Path $Dest) -and -not $Force) {
@@ -689,7 +695,11 @@ if (Test-Path $OsvBin) {
 $WatsonBin = "$Tools\Watson.exe"
 $WatsonCmd = $null
 
-if (Test-Path $WatsonBin) {
+if ((Test-Path $WatsonBin) -and (Is-Stale $WatsonBin)) {
+    Write-Warn "Watson — cache > $MaxAgeDays dias, a actualizar..."
+    Copy-Item $WatsonBin "$WatsonBin.bak" -Force
+    Remove-Item $WatsonBin -Force
+} elseif (Test-Path $WatsonBin) {
     $WatsonCmd = $WatsonBin
     Write-Info "Watson — cache OK"
 } elseif (Get-Command Watson -ErrorAction SilentlyContinue) {
@@ -748,7 +758,16 @@ if (Test-Path $WatsonBin) {
         Remove-Item $watsonTmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    if (-not $WatsonCmd) { Write-Warn "  Watson: não disponível — Camada C (fase 11) será saltada" }
+    if (-not $WatsonCmd) {
+        if (Test-Path "$WatsonBin.bak") {
+            Write-Warn "  Watson: falha ao actualizar — a restaurar versão em cache"
+            Move-Item "$WatsonBin.bak" $WatsonBin -Force
+            $WatsonCmd = $WatsonBin
+        } else {
+            Write-Warn "  Watson: não disponível — Camada C (fase 11) será saltada"
+        }
+    }
+    Remove-Item "$WatsonBin.bak" -Force -ErrorAction SilentlyContinue
 }
 
 # Actualizar referência usada na fase 11
