@@ -725,6 +725,29 @@ else
     info "Grype — cache OK ($(( sz / 1048576 )) MB)"
 fi
 
+# ── Bases de dados de vulnerabilidades (Trivy + Grype) ─────────────
+# Descarregadas aqui (fase 1) em vez de só durante o scan, para
+# falhas de rede serem detectadas/avisadas já no início.
+TRIVY_CMD=$(command -v trivy 2>/dev/null || echo "$TRIVY_BIN")
+if [[ -x "$TRIVY_CMD" ]] || command -v "$TRIVY_CMD" &>/dev/null; then
+    info "A actualizar DB do Trivy..."
+    if "$TRIVY_CMD" image --download-db-only --cache-dir "$TRIVY_CACHE_DIR" 2>"${TOOLS}/trivy_db_err.log"; then
+        info "  Trivy DB OK"
+        rm -f "${TOOLS}/trivy_db_err.log"
+    else
+        warn "  Trivy DB — falha ao actualizar (ver ${TOOLS}/trivy_db_err.log)"
+    fi
+fi
+if [[ -x "$GRYPE_BIN" ]]; then
+    info "A actualizar DB do Grype..."
+    if "$GRYPE_BIN" db update 2>"${TOOLS}/grype_db_err.log"; then
+        info "  Grype DB OK"
+        rm -f "${TOOLS}/grype_db_err.log"
+    else
+        warn "  Grype DB — falha ao actualizar (ver ${TOOLS}/grype_db_err.log)"
+    fi
+fi
+
 # ── OSV-Scanner ───────────────────────────────────────────────────
 OSV_BIN="${TOOLS}/osv-scanner"
 OSV_CMD=""
@@ -1203,7 +1226,6 @@ echo ""
 # Grype
 echo "══ GRYPE ══"; echo ""
 if [[ -x "$GRYPE_BIN" ]]; then
-    "$GRYPE_BIN" db update 2>/dev/null || true
     timeout 300 "$GRYPE_BIN" --output table --only-fixed dir:/ \
         --exclude "/proc" --exclude "/sys" --exclude "/dev" --exclude "/run" 2>/dev/null || true
     echo ""
