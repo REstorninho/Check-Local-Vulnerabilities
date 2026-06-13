@@ -168,6 +168,7 @@ py_check() {
 # ─── Defaults ─────────────────────────────────────────────────────
 SKIP_DOWNLOAD=false
 QUICK_MODE=false
+CHECK_TOOLS=false
 NO_NVD=false
 NO_BROWSER=false
 FORCE=false
@@ -203,6 +204,8 @@ cat <<'EOF'
                           dias (default: 7; 0 desactiva)
     --debug               Activa trace (set -x) para debug_trace.log,
                           sem poluir os ficheiros de output das secções
+    --check-tools         Apenas verifica/descarrega ferramentas e DBs
+                          (Fase 1) e sai, sem correr scans
     --nvd-api-key KEY     NVD API key (também via env var NVD_API_KEY)
                           Com key: rate limit passa de 5/30s para 50/30s (10× mais rápido)
                           Obter em: https://nvd.nist.gov/developers/request-an-api-key
@@ -243,6 +246,7 @@ while [[ $# -gt 0 ]]; do
         --force)            FORCE=true; shift ;;
         --stale-days)       STALE_DAYS="$2"; shift 2 ;;
         --debug)            DEBUG=true; shift ;;
+        --check-tools)      CHECK_TOOLS=true; shift ;;
         --nvd-api-key)      NVD_API_KEY="$2"; shift 2 ;;
         --compare)          COMPARE_FILE="$2"; shift 2 ;;
         --fail-on)          FAIL_ON="$2"; shift 2 ;;
@@ -806,6 +810,12 @@ if is_stale "$LES_SH" || [[ "$FORCE" == "true" ]]; then
         "https://raw.githubusercontent.com/The-Z-Labs/linux-exploit-suggester/master/linux-exploit-suggester.sh" 5000
 else
     info "linux-exploit-suggester — cache OK"
+fi
+
+if [[ "$CHECK_TOOLS" == "true" ]]; then
+    info "Modo --check-tools: ferramentas/DBs verificadas, a terminar."
+    log_jsonl "INFO" "Script terminado (--check-tools)" "\"errors\":${ERROR_COUNT},\"warnings\":${WARN_COUNT}"
+    exit 0
 fi
 
 # ═══════════════════════════════════════════════════════════════════
