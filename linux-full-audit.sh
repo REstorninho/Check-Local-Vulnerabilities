@@ -921,7 +921,7 @@ elif [[ "$HAS_LYNIS" == "true" ]]; then
     ( $SUDO "$LYNIS_BIN" audit system --no-colors --quiet \
         --logfile "${OUT}/04_lynis.log" \
         --report-file "${OUT}/04_lynis_report.dat" \
-        > "${OUT}/04_lynis.txt" 2>&1 ) &
+        > "${OUT}/04_lynis.txt" 2>&1 < /dev/null ) &
     PARALLEL_PIDS+=($!); PARALLEL_LABELS+=("04_lynis")
     info "04_lynis — lançado em background"
 else
@@ -1222,7 +1222,7 @@ if [[ "${#PARALLEL_PIDS[@]}" -gt 0 ]]; then
     done
     [[ "$elapsed" -gt 0 ]] && printf "\r" >&2
     for i in "${!PARALLEL_PIDS[@]}"; do
-        wait "${PARALLEL_PIDS[$i]}" 2>/dev/null
+        wait "${PARALLEL_PIDS[$i]}" 2>/dev/null || true
         sz=$(stat -c%s "${OUT}/${PARALLEL_LABELS[$i]}"*.txt 2>/dev/null | head -1 || echo 0)
         info "${PARALLEL_LABELS[$i]} OK ($(( ${sz:-0} / 1024 )) KB)"
     done
@@ -1579,6 +1579,14 @@ if os.path.exists(grype_file):
         print(f'[+]   Grype JSON: {grype_added} CVEs novos', file=sys.stderr)
     except Exception as e:
         print(f'[!]   Grype JSON erro: {e}', file=sys.stderr)
+        try:
+            with open(grype_file) as gf:
+                head = gf.read(200)
+            print(f'[!]   Grype JSON ({grype_file}) primeiros bytes: {head!r}', file=sys.stderr)
+        except Exception:
+            pass
+else:
+    print(f'[!]   Grype JSON não encontrado: {grype_file}', file=sys.stderr)
 
 # ── NVD API (apps conhecidas) ────────────────────────────────────
 no_nvd = os.environ.get('NO_NVD','false')
