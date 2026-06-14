@@ -372,7 +372,7 @@ sudo bash linux-full-audit.sh --output /tmp/audit
 | Fase | Descrição |
 |------|-----------|
 | 1 | Download de ferramentas (linPEAS, Lynis, Trivy, Grype, OSV-Scanner, LES2, linux-exploit-suggester) |
-| 2 | 11 scans de segurança → ficheiros `.txt` |
+| 2 | 11 scans de segurança → ficheiros `.txt` (linPEAS, Lynis e Trivy correm em paralelo, em background, enquanto as restantes secções avançam) |
 | 3 | Inventário JSON estruturado (packages do sistema + binários conhecidos) |
 | 4 | CVE/CWE JSON via Trivy + Grype + NVD API |
 | 5 | App updates JSON via apt/dnf/pacman/zypper/apk |

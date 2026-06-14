@@ -888,14 +888,17 @@ section "02 — Packages"
 } > "${OUT}/02_packages.txt" 2>&1
 info "02_packages OK"
 
-# ─── 03: linPEAS / privesc manual ────────────────────────────────
+# ─── 03/04/05: linPEAS, Lynis, Trivy (lançados em paralelo em background) ─
+PARALLEL_PIDS=()
+PARALLEL_LABELS=()
+
 section "03 — Privesc"
 if [[ "$QUICK_MODE" == "true" ]]; then
     warn "03_linpeas saltado (--quick)"; echo "[saltado — modo rápido]" > "${OUT}/03_linpeas_skipped.txt"
 elif [[ -f "$LINPEAS" ]]; then
-    run_with_progress "linPEAS (até 5 min)" "timeout 300 bash '$LINPEAS' -a > '${OUT}/03_linpeas.txt' 2>&1" || true
-    sz=$(stat -c%s "${OUT}/03_linpeas.txt" 2>/dev/null || echo 0)
-    info "03_linpeas OK ($(( sz / 1024 )) KB)"
+    ( timeout 300 bash "$LINPEAS" -a > "${OUT}/03_linpeas.txt" 2>&1 ) &
+    PARALLEL_PIDS+=($!); PARALLEL_LABELS+=("03_linpeas")
+    info "03_linpeas — lançado em background (até 5 min)"
 else
     warn "linPEAS não disponível — scan manual..."
     {
@@ -915,12 +918,12 @@ section "04 — Hardening"
 if [[ "$QUICK_MODE" == "true" ]]; then
     warn "04_lynis saltado (--quick)"; echo "[saltado — modo rápido]" > "${OUT}/04_lynis_skipped.txt"
 elif [[ "$HAS_LYNIS" == "true" ]]; then
-    info "A correr Lynis..."
-    $SUDO "$LYNIS_BIN" audit system --no-colors --quiet \
+    ( $SUDO "$LYNIS_BIN" audit system --no-colors --quiet \
         --logfile "${OUT}/04_lynis.log" \
         --report-file "${OUT}/04_lynis_report.dat" \
-        > "${OUT}/04_lynis.txt" 2>&1 || true
-    info "04_lynis OK"
+        > "${OUT}/04_lynis.txt" 2>&1 ) &
+    PARALLEL_PIDS+=($!); PARALLEL_LABELS+=("04_lynis")
+    info "04_lynis — lançado em background"
 else
     warn "Lynis não disponível — hardening manual..."
     {
@@ -943,14 +946,14 @@ if [[ -x "$TRIVY_BIN" ]] || command -v trivy &>/dev/null; then
     else
         SCANNERS="vuln"
     fi
-    run_with_progress "Trivy (texto, scanners: $SCANNERS, até 10 min)" \
-        "timeout 600 '$TRIVY_CMD' fs / \
-        --scanners '$SCANNERS' \
+    ( timeout 600 "$TRIVY_CMD" fs / \
+        --scanners "$SCANNERS" \
         --severity CRITICAL,HIGH,MEDIUM \
         --format table --no-progress --timeout 10m \
         --skip-dirs /proc,/sys,/dev,/run,/snap \
-        > '${OUT}/05_trivy.txt' 2>&1" || true
-    info "05_trivy OK"
+        > "${OUT}/05_trivy.txt" 2>&1 ) &
+    PARALLEL_PIDS+=($!); PARALLEL_LABELS+=("05_trivy")
+    info "05_trivy — lançado em background (até 10 min, scanners: $SCANNERS)"
 else
     warn "Trivy não disponível — CVE check manual..."
     { echo "=== CVE CHECK MANUAL ==="
@@ -958,6 +961,7 @@ else
       command -v ssh     &>/dev/null && echo "OpenSSH: $(ssh -V 2>&1)"
     } > "${OUT}/05_cve_manual.txt" 2>&1
 fi
+
 
 # ─── 06: NVD CVE Lookup básico ────────────────────────────────────
 section "06 — NVD Lookup"
@@ -1200,6 +1204,29 @@ command -v runc &>/dev/null && {
 } > "$PATCH_OUT" 2>&1
 sz=$(stat -c%s "$PATCH_OUT" 2>/dev/null || echo 0)
 info "10_patch_gap OK ($(( sz / 1024 )) KB)"
+
+# ─── Aguardar tarefas em paralelo (linPEAS, Lynis, Trivy) ─────────
+if [[ "${#PARALLEL_PIDS[@]}" -gt 0 ]]; then
+    elapsed=0
+    pending=("${PARALLEL_PIDS[@]}")
+    while [[ "${#pending[@]}" -gt 0 ]]; do
+        next=()
+        for pid in "${pending[@]}"; do
+            kill -0 "$pid" 2>/dev/null && next+=("$pid")
+        done
+        pending=("${next[@]}")
+        [[ "${#pending[@]}" -eq 0 ]] && break
+        sleep 5
+        elapsed=$(( elapsed + 5 ))
+        printf "\r${CYAN}[~]${NC} A aguardar: %s... %ds" "${PARALLEL_LABELS[*]}" "$elapsed" >&2
+    done
+    [[ "$elapsed" -gt 0 ]] && printf "\r" >&2
+    for i in "${!PARALLEL_PIDS[@]}"; do
+        wait "${PARALLEL_PIDS[$i]}" 2>/dev/null
+        sz=$(stat -c%s "${OUT}/${PARALLEL_LABELS[$i]}"*.txt 2>/dev/null | head -1 || echo 0)
+        info "${PARALLEL_LABELS[$i]} OK ($(( ${sz:-0} / 1024 )) KB)"
+    done
+fi
 
 # ─── 11: Application Vulnerability Scan ──────────────────────────
 section "11 — App Vulns"
